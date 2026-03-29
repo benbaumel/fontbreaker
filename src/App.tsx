@@ -91,7 +91,9 @@ const FontCard: React.FC<FontCardProps> = ({ group, selectedVariations, toggleFa
             style={{ 
               fontFamily: `'${group.family}', sans-serif`,
               fontWeight: previewVariation.weight,
-              fontStyle: previewVariation.style
+              fontStyle: previewVariation.style,
+              fontFeatureSettings: '"kern" 1, "liga" 1, "calt" 1, "pnum" 1, "tnum" 1, "onum" 1, "lnum" 1, "dlig" 1',
+              fontVariantLigatures: 'common-ligatures discretionary-ligatures contextual'
             }}
           >
             {PREVIEW_EN}
@@ -102,7 +104,9 @@ const FontCard: React.FC<FontCardProps> = ({ group, selectedVariations, toggleFa
             style={{ 
               fontFamily: `'${group.family}', Arial, sans-serif`,
               fontWeight: previewVariation.weight,
-              fontStyle: previewVariation.style
+              fontStyle: previewVariation.style,
+              fontFeatureSettings: '"kern" 1, "liga" 1, "calt" 1, "pnum" 1, "tnum" 1, "onum" 1, "lnum" 1, "dlig" 1',
+              fontVariantLigatures: 'common-ligatures discretionary-ligatures contextual'
             }}
           >
             {PREVIEW_HE}

@@ -371,37 +371,62 @@ router.post("/download", async (req, res) => {
           else if (magic === 'OTTO') inputType = 'otf';
           else if (isTTF || magic === 'true' || magic === 'typ1') inputType = 'ttf';
 
+          let processed = false;
+
+          // If it's WOFF2, decompress it. The result is a raw TTF/OTF which contains all OpenType features.
+          // We use wawoff2.decompress directly and avoid fonteditor-core's model to preserve all tables (GSUB, GPOS, etc.)
           if (inputType === 'woff2') {
             try {
               const decompressed = await wawoff2.decompress(buffer);
-              fontData = Buffer.from(decompressed);
-              const subMagic = fontData.slice(0, 4).toString();
-              inputType = subMagic === 'OTTO' ? 'otf' : 'ttf';
-            } catch (e) {}
+              buffer = Buffer.from(decompressed);
+              const subMagic = buffer.slice(0, 4).toString();
+              finalExt = subMagic === 'OTTO' ? 'otf' : 'ttf';
+              processed = true;
+              console.log(`Decompressed WOFF2 to ${finalExt} (preserved features)`);
+            } catch (e) {
+              console.error("WOFF2 decompression failed", e);
+            }
+          } 
+          
+          // If it's already a raw format (TTF/OTF), use it directly to preserve all tables/features.
+          if (!processed && (inputType === 'ttf' || inputType === 'otf')) {
+            buffer = fontData;
+            finalExt = inputType;
+            processed = true;
+            console.log(`Using raw ${inputType} (preserved features)`);
           }
 
-          try {
-            const fontObj = Font.create(fontData, { type: inputType as any });
-            const out = fontObj.write({ type: 'ttf' });
-            if (out) {
-              buffer = Buffer.from(out as any);
-              finalExt = 'ttf';
-            }
-          } catch (e) {
+          // Fallback to fonteditor-core ONLY if we haven't processed it yet (e.g., WOFF1 or other formats)
+          if (!processed) {
             try {
               const fontObj = Font.create(fontData, { type: inputType as any });
-              const out = fontObj.write({ type: 'otf' });
+              const out = fontObj.write({ type: 'ttf' });
               if (out) {
                 buffer = Buffer.from(out as any);
-                finalExt = 'otf';
+                finalExt = 'ttf';
+                processed = true;
+                console.log(`Converted ${inputType} to ttf via fonteditor-core`);
               }
-            } catch (e2) {
-              // Fallback to original if conversion fails
-              buffer = fontData;
-              finalExt = inputType === 'woff' || inputType === 'woff2' ? 'ttf' : inputType;
+            } catch (e) {
+              try {
+                const fontObj = Font.create(fontData, { type: inputType as any });
+                const out = fontObj.write({ type: 'otf' });
+                if (out) {
+                  buffer = Buffer.from(out as any);
+                  finalExt = 'otf';
+                  processed = true;
+                  console.log(`Converted ${inputType} to otf via fonteditor-core`);
+                }
+              } catch (e2) {
+                // Final fallback: use original data
+                buffer = fontData;
+                finalExt = inputType === 'woff' ? 'ttf' : inputType;
+                console.log(`Fallback to original data for ${inputType}`);
+              }
             }
           }
         } catch (e) {
+          console.error("Font processing error:", e);
           buffer = originalBuffer;
           finalExt = originalExt;
         }
