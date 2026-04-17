@@ -678,8 +678,8 @@ export default function App() {
             <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center mb-8">
               <Upload className="w-16 h-16 text-orange-600 animate-bounce" />
             </div>
-            <h2 className="text-5xl font-black tracking-tighter mb-4">שחרר כדי להעלות</h2>
-            <p className="text-xl font-bold opacity-80">גרור קבצי פונטים לכל מקום במסך</p>
+            <h2 className="text-5xl font-black tracking-tighter mb-4">שחררו כדי להעלות</h2>
+            <p className="text-xl font-bold opacity-80">גררו קבצי פונטים לכל מקום במסך</p>
           </motion.div>
         )}
       </AnimatePresence>
@@ -690,7 +690,7 @@ export default function App() {
           <div 
             className="flex items-center gap-4 cursor-pointer hover:opacity-80 transition-opacity justify-self-start"
             onClick={resetApp}
-            title="חזרה לדף הבית ואיפוס החיפוש"
+            title="חזרו לדף הבית ואפסו את החיפוש"
           >
             <div className="w-12 h-12 bg-orange-600 rounded-2xl flex items-center justify-center">
               <Hammer className="text-white w-7 h-7" />
@@ -700,30 +700,42 @@ export default function App() {
             </h1>
           </div>
 
-          {/* Center: Scan Form */}
-          <form onSubmit={handleScan} className="relative group w-full max-w-3xl justify-self-center">
-            <Globe className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-600 transition-colors" />
-            <input
-              type="url"
-              placeholder="הדביקו כתובת אתר..."
-              title="הזינו כתובת אתר לסריקה"
-              className="w-full h-12 pr-14 pl-28 rounded-full border-2 border-slate-300 focus:border-orange-600 bg-white text-slate-900 placeholder:text-slate-500 transition-all outline-none text-sm font-bold tracking-wide"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              required
-            />
-            <div className="absolute left-1.5 top-1/2 -translate-y-1/2">
-              <button
-                type="submit"
-                disabled={loading || uploading}
-                title="סרקו את האתר למציאת פונטים"
-                className="h-9 px-6 bg-orange-600 text-white rounded-full text-xs font-black uppercase tracking-widest hover:bg-orange-700 active:scale-95 disabled:opacity-50 transition-all flex items-center gap-2 shadow-none"
-              >
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                סרקו
-              </button>
-            </div>
-          </form>
+          {/* Center: Input Methods (Upload & Scan) */}
+          <div className="flex items-center gap-3 w-full max-w-2xl justify-self-center">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading || loading}
+              title="העלו קבצי פונטים מהמחשב"
+              className="w-12 h-12 rounded-2xl border-2 border-slate-300 text-slate-500 hover:text-orange-600 hover:border-orange-600 active:scale-95 transition-all flex items-center justify-center bg-white shadow-none shrink-0"
+            >
+              {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
+            </button>
+
+            <form onSubmit={handleScan} className="relative group flex-1">
+              <Globe className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-600 transition-colors" />
+              <input
+                type="url"
+                placeholder="הדביקו כתובת אתר..."
+                title="הזינו כתובת אתר לסריקה"
+                className="w-full h-12 pr-14 pl-28 rounded-full border-2 border-slate-300 focus:border-orange-600 bg-white text-slate-900 placeholder:text-slate-500 transition-all outline-none text-sm font-bold tracking-wide"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                required
+              />
+              <div className="absolute left-1.5 top-1/2 -translate-y-1/2">
+                <button
+                  type="submit"
+                  disabled={loading || uploading}
+                  title="סרקו את האתר למציאת פונטים"
+                  className="h-9 px-6 bg-orange-600 text-white rounded-full text-xs font-black uppercase tracking-widest hover:bg-orange-700 active:scale-95 disabled:opacity-50 transition-all flex items-center gap-2 shadow-none"
+                >
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                  סרקו
+                </button>
+              </div>
+            </form>
+          </div>
 
           {/* Right: Actions */}
           <div className="flex items-center gap-3 justify-self-end">
@@ -736,16 +748,6 @@ export default function App() {
               className="hidden"
             />
             
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading || loading}
-              title="העלו קבצי פונטים מהמחשב"
-              className="w-12 h-12 rounded-xl border-2 border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300 active:scale-95 transition-all flex items-center justify-center bg-white shadow-none"
-            >
-              {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
-            </button>
-
             <button
               onClick={handleDownload}
               disabled={selectedVariations.length === 0 || downloading}
@@ -769,7 +771,7 @@ export default function App() {
             <button
               onClick={() => setShowLogoutConfirm(true)}
               className="p-3 rounded-xl border-2 border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50 active:scale-95 transition-all group shadow-none"
-              title="התנתקות מהמערכת"
+              title="התנתקו מהמערכת"
             >
               <LogOut className="w-5 h-5 group-hover:-translate-x-0.5 transition-transform" />
             </button>
@@ -836,7 +838,7 @@ export default function App() {
         {loading && (
           <div className="flex flex-col items-center justify-center py-40 text-center">
             <Loader2 className="w-16 h-16 text-orange-600 animate-spin mb-8" />
-            <h2 className="text-2xl font-black tracking-tight mb-3">סורקים פונטים</h2>
+            <h2 className="text-2xl font-black tracking-tight mb-3">סורק פונטים</h2>
             <p className="text-slate-600 text-base font-bold text-balance">{loadingMessage}</p>
           </div>
         )}
@@ -846,7 +848,7 @@ export default function App() {
             <div className="w-28 h-28 rounded-3xl flex items-center justify-center mb-10 border-2 border-slate-300 bg-white text-slate-300 shadow-none">
               <Globe className="w-14 h-14" />
             </div>
-            <h2 className="text-3xl font-black tracking-tight mb-3">מוכנים לסריקה</h2>
+            <h2 className="text-3xl font-black tracking-tight mb-3">מוכן לסריקה</h2>
             <p className="text-slate-600 text-lg max-w-sm mx-auto font-bold text-balance">הזינו כתובת אתר למעלה כדי לחלץ את אוסף הפונטים שלו באופן מיידי.</p>
           </div>
         )}

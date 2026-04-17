@@ -1,5 +1,6 @@
 {
-  "name": "font breaker 1.1",
+  "name": "font breaker 1.3",
   "description": "סרוק כל אתר כדי לזהות, להציג ולהוריד את הפונטים שלו כקבצי OTF.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": []
 }

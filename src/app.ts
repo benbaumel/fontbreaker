@@ -73,10 +73,35 @@ const isVariableFont = (d: Buffer): boolean => {
   }
 };
 
-const rebuildWithFontEditor = (d: Buffer, type: string, fontFamily: string = 'FontBreaker', forceClean: boolean = false): Buffer | null => {
+const cleanFamilyName = (f: string): string => {
+  if (!f) return '';
+  return f.replace(/['"]/g, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2') // Handle camelCase
+    .replace(/_/g, ' ')
+    .replace(/\b(hairline|thin|extralight|ultralight|light|book|regular|normal|medium|semibold|demibold|bold|extrabold|ultrabold|black|heavy|fat|italic|oblique|webfont|woff2?|ttf|otf|eot|svg|variable|vf|it|bd|md|bk|rg|demi|semi|extra|ultra|hollow|outline|stencil|inline|shadow|fill|soft|rounded|ml|v\d+|aaa|v\.\d+|v|v\d+\.\d+|v\d+-\d+)\b/gi, '')
+    .replace(/(?<=^|[\s\-_])(קל|רגיל|בינוני|חצי שמן|שמן|שמן מאוד|שחור|נטוי|צר|רחב|פונטביט|אאא)(?=$|[\s\-_])/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[-\s]+$/g, '')
+    .replace(/^[-\s]+/g, '')
+    .trim();
+};
+
+const getSubFamilyName = (weight: string, style: string): string => {
+  const weights: Record<string, string> = {
+    '100': 'Thin', '200': 'ExtraLight', '300': 'Light', '400': 'Regular',
+    '500': 'Medium', '600': 'SemiBold', '700': 'Bold', '800': 'ExtraBold', '900': 'Black'
+  };
+  const w = weights[weight] || 'Regular';
+  const s = style && style !== 'normal' ? style.charAt(0).toUpperCase() + style.slice(1) : '';
+  if (w === 'Regular' && s) return s;
+  if (w === 'Regular' && !s) return 'Regular';
+  return s ? `${w} ${s}` : w;
+};
+
+const rebuildWithFontEditor = (d: Buffer, inputType: string, targetType: string = 'ttf', fontFamily: string = 'FontBreaker', weight: string = '400', style: string = 'normal', forceClean: boolean = false): Buffer | null => {
   try {
     let fontObj: any = null;
-    const tryTypes = [type, 'ttf', 'woff', 'woff2', 'otf', 'eot'];
+    const tryTypes = [inputType, 'ttf', 'woff', 'woff2', 'otf', 'eot'];
     for (const t of tryTypes) {
       try {
         fontObj = Font.create(d, { type: t as any, hinting: true });
@@ -88,39 +113,46 @@ const rebuildWithFontEditor = (d: Buffer, type: string, fontFamily: string = 'Fo
     const ttf = fontObj.get() as any;
     if (!ttf.glyf || ttf.glyf.length === 0) return null;
     
-    const cleanName = (s: any) => (typeof s === 'string' ? s.replace(/[^\x00-\x7F]/g, '').trim() : '');
-    let family = cleanName(ttf.name?.fontFamily) || fontFamily.replace(/[^\x00-\x7F]/g, '') || 'FontBreaker';
-    let subFamily = cleanName(ttf.name?.fontSubFamily) || 'Regular';
-    if (!family || family.length < 2) family = 'FontBreaker';
-    const psName = family.replace(/[^a-zA-Z0-9]/g, '') || 'FontBreaker';
+    const cleanName = (s: any) => (typeof s === 'string' ? s.replace(/[^\x00-\x7F\u0590-\u05FF]/g, '').trim() : '');
+    let rawFamily = cleanName(ttf.name?.fontFamily) || cleanName(fontFamily) || 'FontBreaker';
+    let family = cleanFamilyName(rawFamily);
+    let subFamily = getSubFamilyName(weight, style);
+    
+    if (!family || family.length < 2) family = rawFamily || 'FontBreaker';
+    const psName = family.replace(/[^a-zA-Z0-9-]/g, '') || 'FontBreaker';
     const fullName = `${family} ${subFamily}`;
-    const uniqueId = `${family} ${subFamily} ${Date.now()}`;
+    const uniqueId = `${family}-${subFamily}-${weight}`;
 
     ttf.name = [
       { nameID: 1, platformID: 3, encodingID: 1, languageID: 1033, nameString: family },
       { nameID: 2, platformID: 3, encodingID: 1, languageID: 1033, nameString: subFamily },
       { nameID: 3, platformID: 3, encodingID: 1, languageID: 1033, nameString: uniqueId },
       { nameID: 4, platformID: 3, encodingID: 1, languageID: 1033, nameString: fullName },
-      { nameID: 6, platformID: 3, encodingID: 1, languageID: 1033, nameString: psName },
+      { nameID: 6, platformID: 3, encodingID: 1, languageID: 1033, nameString: `${psName.replace(/-+$/, '')}-${subFamily.replace(/\s+/g, '')}` },
       { nameID: 1, platformID: 1, encodingID: 0, languageID: 0, nameString: family },
       { nameID: 2, platformID: 1, encodingID: 0, languageID: 0, nameString: subFamily },
       { nameID: 4, platformID: 1, encodingID: 0, languageID: 0, nameString: fullName },
-      { nameID: 6, platformID: 1, encodingID: 0, languageID: 0, nameString: psName }
+      { nameID: 6, platformID: 1, encodingID: 0, languageID: 0, nameString: `${psName.replace(/-+$/, '')}-${subFamily.replace(/\s+/g, '')}` }
     ];
 
     if (!ttf.head || forceClean) {
       ttf.head = {
         version: 1, fontRevision: 1, checkSumAdjustment: 0, magicNumber: 0x5F0F3CF5,
-        flags: 0x0003, unitsPerEm: ttf.head?.unitsPerEm || 1000, created: ttf.head?.created || Date.now(),
+        flags: 0x0003, unitsPerEm: ttf.head?.unitsPerEm || (targetType === 'ttf' ? 2048 : 1000), 
+        created: ttf.head?.created || Date.now(),
         modified: Date.now(), xMin: ttf.head?.xMin || 0, yMin: ttf.head?.yMin || -200,
         xMax: ttf.head?.xMax || 1000, yMax: ttf.head?.yMax || 1000, macStyle: 0,
-        lowestRecPPEM: 8, fontDirectionHint: 2, indexToLocFormat: 0, glyphDataFormat: 0
+        lowestRecPPEM: 8, fontDirectionHint: 2, glyphDataFormat: 0
       };
+      // Do NOT force indexToLocFormat: 0, as it breaks fonts with >64k glyph data (Short Offset)
+      // fonteditor-core will choose correctly if we don't force it.
     }
 
     if (!ttf.hhea || forceClean) {
+      const defaultAscent = targetType === 'ttf' ? 1800 : 1000;
+      const defaultDescent = targetType === 'ttf' ? -400 : -200;
       ttf.hhea = {
-        version: 1, ascent: ttf.hhea?.ascent || 1000, descent: ttf.hhea?.descent || -200,
+        version: 1, ascent: ttf.hhea?.ascent || defaultAscent, descent: ttf.hhea?.descent || defaultDescent,
         lineGap: ttf.hhea?.lineGap || 0, advanceWidthMax: ttf.hhea?.advanceWidthMax || 1000,
         minLeftSideBearing: ttf.hhea?.minLeftSideBearing || 0, minRightSideBearing: ttf.hhea?.minRightSideBearing || 0,
         xMaxExtent: ttf.hhea?.xMaxExtent || 1000, caretSlopeRise: 1, caretSlopeRun: 0,
@@ -159,26 +191,33 @@ const rebuildWithFontEditor = (d: Buffer, type: string, fontFamily: string = 'Fo
     }
 
     fontObj.set(ttf);
-    const outType = (type === 'otf') ? 'otf' : 'ttf';
-    const out = fontObj.write({ type: outType as any, hinting: false });
+    const out = fontObj.write({ 
+      type: targetType as any, 
+      hinting: targetType === 'ttf', // Enable hinting for TTF to prevent "broken" rendering
+      compound2simple: true // Flattens composite glyphs for better compatibility
+    });
     return out ? Buffer.from(out as any) : null;
   } catch (e: any) {
     return null;
   }
 };
 
-const rebuildWithOpenType = (d: Buffer): Buffer | null => {
+const rebuildWithOpenType = (d: Buffer, fontFamily: string = 'FontBreaker', weight: string = '400', style: string = 'normal'): Buffer | null => {
   try {
     const ab = d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength);
     const fontParsed = opentype.parse(ab);
     if (fontParsed.tables.fvar) return null;
-    const rawFamily = fontParsed.names.fontFamily?.en || fontParsed.names.fontFamily?.he || 'FontBreaker';
-    const family = typeof rawFamily === 'string' ? rawFamily.replace(/[^\x00-\x7F]/g, '') : 'FontBreaker';
-    const subFamily = fontParsed.names.fontSubfamily?.en || 'Regular';
-    fontParsed.names.fontFamily = { en: family || 'FontBreaker' };
+    
+    const cleanName = (s: any) => (typeof s === 'string' ? s.replace(/[^\x00-\x7F\u0590-\u05FF]/g, '').trim() : '');
+    const rawFamily = fontParsed.names.fontFamily?.en || fontParsed.names.fontFamily?.he || fontFamily;
+    const family = cleanFamilyName(cleanName(rawFamily)) || 'FontBreaker';
+    const subFamily = getSubFamilyName(weight, style);
+    
+    fontParsed.names.fontFamily = { en: family };
     fontParsed.names.fontSubfamily = { en: subFamily };
-    fontParsed.names.fullName = { en: `${family || 'FontBreaker'} ${subFamily}` };
-    fontParsed.names.postScriptName = { en: (family || 'FontBreaker').replace(/\s+/g, '') };
+    fontParsed.names.fullName = { en: `${family} ${subFamily}` };
+    const psFamily = family.replace(/[^a-zA-Z0-9-]/g, '').replace(/-+$/, '');
+    fontParsed.names.postScriptName = { en: `${psFamily}-${subFamily.replace(/\s+/g, '')}` };
     const out = fontParsed.toBuffer();
     return out ? Buffer.from(out) : null;
   } catch (e: any) {
@@ -186,7 +225,7 @@ const rebuildWithOpenType = (d: Buffer): Buffer | null => {
   }
 };
 
-const bruteForceOpenTypeRepair = (d: Buffer, fontFamily: string = 'FontBreaker'): Buffer | null => {
+const bruteForceOpenTypeRepair = (d: Buffer, fontFamily: string = 'FontBreaker', weight: string = '400', style: string = 'normal'): Buffer | null => {
   try {
     const ab = d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength);
     const oldFont = opentype.parse(ab);
@@ -199,10 +238,11 @@ const bruteForceOpenTypeRepair = (d: Buffer, fontFamily: string = 'FontBreaker')
       } catch (e) {}
     }
     if (glyphs.length === 0) return null;
-    const family = fontFamily.replace(/[^\x00-\x7F]/g, '') || 'FontBreaker';
+    const family = cleanFamilyName(fontFamily.replace(/[^\x00-\x7F\u0590-\u05FF]/g, '').trim()) || 'FontBreaker';
+    const subFamily = getSubFamilyName(weight, style);
     const newFont = new opentype.Font({
       familyName: family,
-      styleName: 'Regular',
+      styleName: subFamily,
       unitsPerEm: oldFont.unitsPerEm || 1000,
       ascender: oldFont.ascender || 800,
       descender: oldFont.descender || -200,
@@ -215,7 +255,7 @@ const bruteForceOpenTypeRepair = (d: Buffer, fontFamily: string = 'FontBreaker')
   }
 };
 
-const processFontSuperAggressively = async (data: Buffer, hintedType: string, fontFamily: string = 'FontBreaker'): Promise<{ buffer: Buffer, ext: string }> => {
+const processFontSuperAggressively = async (data: Buffer, hintedType: string, fontFamily: string = 'FontBreaker', weight: string = '400', style: string = 'normal'): Promise<{ buffer: Buffer, ext: string }> => {
   const reportLogs: string[] = [];
   const candidates: { buffer: Buffer, type: string, note: string }[] = [
     { buffer: data, type: hintedType, note: 'original' }
@@ -240,6 +280,8 @@ const processFontSuperAggressively = async (data: Buffer, hintedType: string, fo
     }
   }
 
+  const isOTF = (buf: Buffer) => buf.slice(0, 4).toString() === 'OTTO';
+
   for (const cand of candidates) {
     let currentData = cand.buffer;
     let currentType = cand.type;
@@ -248,37 +290,60 @@ const processFontSuperAggressively = async (data: Buffer, hintedType: string, fo
       try {
         const decompressed = await wawoff2.decompress(currentData);
         currentData = Buffer.from(decompressed);
-        currentType = currentData.slice(0, 4).toString() === 'OTTO' ? 'otf' : 'ttf';
+        currentType = isOTF(currentData) ? 'otf' : 'ttf';
       } catch (e) {}
     }
 
-    if (isVariableFont(currentData)) return { buffer: currentData, ext: currentType === 'otf' ? 'otf' : 'ttf' };
+    if (isVariableFont(currentData)) return { buffer: currentData, ext: isOTF(currentData) ? 'otf' : 'ttf' };
 
     if (validateFont(currentData)) {
-      const touched = rebuildWithOpenType(currentData);
-      if (touched && validateFont(touched)) return { buffer: touched, ext: 'ttf' };
-      return { buffer: currentData, ext: currentType === 'otf' ? 'otf' : 'ttf' };
+      const touched = rebuildWithOpenType(currentData, fontFamily, weight, style);
+      if (touched && validateFont(touched)) return { buffer: touched, ext: isOTF(touched) ? 'otf' : 'ttf' };
+      return { buffer: currentData, ext: isOTF(currentData) ? 'otf' : 'ttf' };
     }
 
-    let result = rebuildWithOpenType(currentData);
+    // Try OTF repair first (User preference)
+    let result = rebuildWithFontEditor(currentData, currentType, 'otf', fontFamily, weight, style);
+    if (result && validateFont(result)) return { buffer: result, ext: 'otf' };
+
+    result = rebuildWithOpenType(currentData, fontFamily, weight, style);
+    if (result && validateFont(result)) return { buffer: result, ext: isOTF(result) ? 'otf' : 'ttf' };
+
+    result = rebuildWithFontEditor(currentData, currentType, 'ttf', fontFamily, weight, style);
     if (result && validateFont(result)) return { buffer: result, ext: 'ttf' };
 
-    result = rebuildWithFontEditor(currentData, currentType, fontFamily);
-    if (result && validateFont(result)) return { buffer: result, ext: 'ttf' };
-
-    result = bruteForceOpenTypeRepair(currentData, fontFamily);
+    result = bruteForceOpenTypeRepair(currentData, fontFamily, weight, style);
     if (result && validateFont(result)) return { buffer: result, ext: 'ttf' };
   }
 
   const types = ['ttf', 'otf', 'woff', 'eot'];
   for (const t of types) {
     for (const cand of candidates) {
-      let result = rebuildWithFontEditor(cand.buffer, t, fontFamily);
+      // Try OTF first
+      let result = rebuildWithFontEditor(cand.buffer, t, 'otf', fontFamily, weight, style);
+      if (result && validateFont(result)) return { buffer: result, ext: 'otf' };
+      
+      result = rebuildWithFontEditor(cand.buffer, t, 'ttf', fontFamily, weight, style);
       if (result && validateFont(result)) return { buffer: result, ext: 'ttf' };
     }
   }
 
-  const finalExt = hintedType === 'woff2' || hintedType === 'woff' ? 'ttf' : (hintedType === 'opentype' ? 'otf' : hintedType);
+  const getFinalExt = async (buf: Buffer, hint: string) => {
+    if (isOTF(buf)) return 'otf';
+    const magic = buf.slice(0, 4).toString();
+    if (magic === 'wOF2') {
+      try {
+        const d = await wawoff2.decompress(buf);
+        return isOTF(Buffer.from(d)) ? 'otf' : 'ttf';
+      } catch (e) {}
+    }
+    if (magic === 'wOFF') return 'ttf';
+    if (hint === 'woff2' || hint === 'woff' || hint === 'ttf') return 'ttf';
+    if (hint === 'opentype') return 'otf';
+    return hint || 'ttf';
+  };
+
+  const finalExt = await getFinalExt(data, hintedType);
   return { buffer: data, ext: finalExt };
 };
 
@@ -642,25 +707,34 @@ const extractFontsFromCss = (css: string, baseUrl: string) => {
 };
 
 const weightKeywords: Record<string, string> = {
-  'thin': '100', 'hairline': '100', 
+  'extra-bold': '800', 'extrabold': '800', 'ultra-bold': '800', 'ultrabold': '800', 'שמן מאוד': '800',
+  'semi-bold': '600', 'semibold': '600', 'demi-bold': '600', 'demibold': '600', 'חצי שמן': '600',
   'extra-light': '200', 'extralight': '200', 'ultra-light': '200', 'ultralight': '200', 
-  'light': '300',
-  'book': '400', 'regular': '400', 'normal': '400', 
-  'medium': '500', 
-  'semi-bold': '600', 'semibold': '600', 'demi-bold': '600', 'demibold': '600', 
-  'bold': '700', 
-  'extra-bold': '800', 'extrabold': '800', 'ultra-bold': '800', 'ultrabold': '800', 
-  'black': '900', 'heavy': '900', 'fat': '900', 'poster': '900',
-  'hollow': '400', 'outline': '400', 'stencil': '400', 'inline': '400', 'shadow': '400', 'fill': '400',
+  'thin': '100', 'hairline': '100', 
+  'light': '300', 'קל': '300',
+  'book': '400', 'regular': '400', 'normal': '400', 'רגיל': '400',
+  'medium': '500', 'בינוני': '500',
+  'bold': '700', 'שמן': '700',
+  'black': '900', 'heavy': '900', 'fat': '900', 'poster': '900', 'שחור': '900',
+  'stencil': '400',
 };
 
 const styleKeywords = [
-  'italic', 'oblique', 'hollow', 'outline', 'stencil', 'inline', 'shadow', 'fill', 'soft', 'rounded', 'brutalist', 'display', 'condensed', 'expanded'
+  'italic', 'oblique', 'hollow', 'outline', 'stencil', 'inline', 'shadow', 'fill', 'soft', 'rounded', 'brutalist', 'display', 'condensed', 'expanded', 'נטוי', 'צר', 'רחב', 'פונטביט', 'אאא'
 ];
 
 const extractWeight = (name: string) => {
   const lower = name.toLowerCase();
-  // Look for exact 3-digit weight (100-900)
+  
+  // Look for numeric weight anywhere (100-950)
+  // Match things like 400, 450, 500, etc.
+  const numericMatch = lower.match(/\b([1-9][0-9][05])\b/);
+  if (numericMatch) {
+    const val = parseInt(numericMatch[1]);
+    if (val >= 100 && val <= 950) return val.toString();
+  }
+
+  // Look for generic 3-digit weight
   const match = lower.match(/\b([1-9]00)\b/);
   if (match) return match[1];
   
@@ -677,7 +751,7 @@ const normalizeFamily = (f: string, fUrl?: string) => {
     const fileName = fUrl.split('/').pop()?.split(/[?#]/)[0].split('.')[0] || '';
     if (fileName && fileName.length > 2) {
       let parts = fileName.split(/[-_]/);
-      let nameParts = parts.filter(p => !/^(regular|bold|italic|medium|light|thin|black|woff2?|ttf|otf|eot|svg|variable|vf|it|bd|md|bk|rg|demi|semi|extra|ultra|hairline|extralight|ultralight|book|semibold|demibold|extrabold|ultrabold|heavy|fat|poster|oblique|webfont|ml|v\d+|aaa|v\.\d+|v)$/i.test(p));
+      let nameParts = parts.filter(p => !/^(fb|mf|aaa|g|regular|bold|italic|medium|light|thin|black|woff2?|ttf|otf|eot|svg|variable|vf|it|bd|md|bk|rg|demi|semi|extra|ultra|hairline|extralight|ultralight|book|semibold|demibold|extrabold|ultrabold|heavy|fat|poster|oblique|webfont|ml|v\d+|aaa|v\.\d+|v)$/i.test(p));
       urlName = nameParts.join(' ').replace(/([A-Z])/g, ' $1').trim();
       urlName = urlName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
     }
@@ -689,9 +763,13 @@ const normalizeFamily = (f: string, fUrl?: string) => {
   
   // Remove common weight/style keywords but keep sub-family names like "Brutalist", "Display", "Condensed", etc.
   let clean = f.replace(/['"]/g, '')
-    .replace(/[-_]/g, ' ')
-    .replace(/\b(hairline|thin|extralight|ultralight|light|book|regular|normal|medium|semibold|demibold|bold|extrabold|ultrabold|black|heavy|fat|italic|oblique|webfont|woff2?|ttf|otf|eot|svg|variable|vf|it|bd|md|bk|rg|demi|semi|extra|ultra|hollow|outline|stencil|inline|shadow|fill|soft|rounded|ml|v\d+|aaa|v\.\d+|v|v\d+\.\d+|v\d+-\d+)\b/gi, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2') // Handle camelCase
+    .replace(/_/g, ' ')
+    .replace(/\b(fb|mf|aaa|g|hairline|thin|extralight|ultralight|light|book|regular|normal|medium|semibold|demibold|bold|extrabold|ultrabold|black|heavy|fat|italic|oblique|webfont|woff2?|ttf|otf|eot|svg|variable|vf|it|bd|md|bk|rg|demi|semi|extra|ultra|ml|v\d+|aaa|v\.\d+|v|v\d+\.\d+|v\d+-\d+)\b/gi, '')
+    .replace(/(?<=^|[\s\-_])(קל|רגיל|בינוני|חצי שמן|שמן|שמן מאוד|שחור|נטוי|צר|רחב|פונטביט|אאא)(?=$|[\s\-_])/g, '')
     .replace(/\s+/g, ' ')
+    .replace(/[-\s]+$/g, '')
+    .replace(/^[-\s]+/g, '')
     .trim();
 
   if (clean.toLowerCase().includes("font style") || clean.toLowerCase().includes("myfont")) {
@@ -701,15 +779,6 @@ const normalizeFamily = (f: string, fUrl?: string) => {
   // Title Case
   clean = clean.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
   
-  // If we have a name from the URL and it's a prefix of the metadata name, or if the metadata name is much longer,
-  // we might want to prefer the URL name if it's cleaner.
-  if (urlName && urlName.length > 2 && clean.length > urlName.length) {
-    if (clean.toLowerCase().startsWith(urlName.toLowerCase())) {
-      // If metadata name is just URL name + more garbage, use URL name
-      return urlName;
-    }
-  }
-
   return clean || urlName || f.trim() || "Unknown Font";
 };
 
@@ -749,14 +818,74 @@ const getRealFontMetadataFromBuffer = async (buffer: Buffer) => {
     const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     const font = opentype.parse(ab);
     
-    // Prefer Typographic Family (16) over Font Family (1)
-    const family = font.names.preferredFamily?.en || font.names.preferredFamily?.he || 
-                   font.names.fontFamily?.en || font.names.fontFamily?.he || 
-                   Object.values(font.names.preferredFamily || {})[0] || 
-                   Object.values(font.names.fontFamily || {})[0] || null;
+    // 1. Extract Family Name
+    // Prefer Typographic Family (16) over Font Family (1) over Full Name (4)
+    const preferredFamily = font.names.preferredFamily?.en || font.names.preferredFamily?.he || Object.values(font.names.preferredFamily || {})[0];
+    const fontFamily = font.names.fontFamily?.en || font.names.fontFamily?.he || Object.values(font.names.fontFamily || {})[0];
+    const fullName = font.names.fullName?.en || font.names.fullName?.he || Object.values(font.names.fullName || {})[0];
+    const family = preferredFamily || fontFamily || fullName || null;
+
+    // 2. Extract Subfamily Name
+    // Prefer Typographic Subfamily (17) over WWS Subfamily (22) over Font Subfamily (2)
+    const preferredSubfamily = font.names.preferredSubfamily?.en || font.names.preferredSubfamily?.he || Object.values(font.names.preferredSubfamily || {})[0];
+    const wwsSubfamily = font.names.wwsSubfamily?.en || font.names.wwsSubfamily?.he || Object.values(font.names.wwsSubfamily || {})[0];
+    const fontSubfamily = font.names.fontSubfamily?.en || font.names.fontSubfamily?.he || Object.values(font.names.fontSubfamily || {})[0];
+    let subfamily = preferredSubfamily || wwsSubfamily || fontSubfamily || "";
+    let subLower = subfamily.toLowerCase();
+
+    // 3. Extract Weight
+    let weight = font.tables.os2?.usWeightClass?.toString() || null;
     
-    const weight = font.tables.os2?.usWeightClass?.toString() || null;
-    const style = (font.tables.post?.italicAngle !== 0 || (font.names.fontSubfamily?.en || '').toLowerCase().includes('italic')) ? 'italic' : 'normal';
+    // If weight is missing or default (400), try to infer from subfamily string
+    if (!weight || weight === "400") {
+      if (subLower.includes('thin') || subLower.includes('hairline')) weight = "100";
+      else if (subLower.includes('extralight') || subLower.includes('extra light') || subLower.includes('ultralight')) weight = "200";
+      else if (subLower.includes('light')) weight = "300";
+      else if (subLower.includes('medium')) weight = "500";
+      else if (subLower.includes('extrabold') || subLower.includes('extra bold') || subLower.includes('ultrabold')) weight = "800";
+      else if (subLower.includes('semibold') || subLower.includes('semi bold') || subLower.includes('demibold')) weight = "600";
+      else if (subLower.includes('bold')) weight = "700";
+      else if (subLower.includes('black') || subLower.includes('heavy') || subLower.includes('poster')) weight = "900";
+      else if (subLower.includes('stencil')) weight = "400"; // Categorize stencil
+    }
+    
+    // Check macStyle bold bit (bit 0)
+    if (font.tables.head && (font.tables.head.macStyle & 1)) {
+      if (!weight || parseInt(weight) < 700) weight = "700";
+    }
+
+    // 4. Extract Style (Italic/Oblique)
+    let isItalic = false;
+    let isOblique = false;
+    
+    // Check OS/2 fsSelection
+    if (font.tables.os2) {
+      if (font.tables.os2.fsSelection & 1) isItalic = true; // Bit 0: ITALIC
+      if (font.tables.os2.fsSelection & 512) isOblique = true; // Bit 9: OBLIQUE
+    }
+    
+    // Check head macStyle (bit 1: Italic)
+    if (font.tables.head && (font.tables.head.macStyle & 2)) isItalic = true;
+    
+    // Check post italicAngle
+    if (font.tables.post && font.tables.post.italicAngle !== 0) isItalic = true;
+    
+    // Check subfamily string
+    if (subLower.includes('italic')) isItalic = true;
+    if (subLower.includes('oblique')) isOblique = true;
+    
+    const style = isItalic ? 'italic' : (isOblique ? 'oblique' : 'normal');
+
+    // Refine Subfamily Name based on weight and style if it's generic
+    if (subLower === 'regular' || subLower === 'normal' || subLower === '') {
+      const weightNames: Record<string, string> = {
+        '100': 'Thin', '200': 'ExtraLight', '300': 'Light', '400': 'Regular',
+        '500': 'Medium', '600': 'SemiBold', '700': 'Bold', '800': 'ExtraBold', '900': 'Black'
+      };
+      let wName = weightNames[weight || '400'] || 'Regular';
+      if (subLower.includes('stencil')) wName = 'Stencil';
+      subfamily = style === 'normal' ? wName : (wName === 'Regular' ? 'Italic' : `${wName} Italic`);
+    }
 
     // Extract Variable Font Metadata
     let axes: any[] = [];
@@ -798,14 +927,73 @@ const getRealFontMetadataFromBuffer = async (buffer: Buffer) => {
 
     return { 
       family: typeof family === 'string' ? family : null, 
-      weight, 
+      subfamily: typeof subfamily === 'string' ? subfamily : null,
+      weight: weight || "400", 
       style,
       isVariable,
       axes,
       instances
     };
   } catch (e) {
-    return null;
+    // Fallback to fonteditor-core for WOFF or corrupted files
+    try {
+      let fontObj: any = null;
+      const tryTypes = ['ttf', 'woff', 'woff2', 'otf', 'eot'];
+      for (const t of tryTypes) {
+        try {
+          fontObj = Font.create(buffer, { type: t as any, hinting: false });
+          if (fontObj.get().name) break;
+        } catch (err) {}
+      }
+
+      if (!fontObj) return null;
+      const ttf = fontObj.get() as any;
+      if (!ttf || !ttf.name) return null;
+
+      const family = ttf.name.preferredFamily || ttf.name.fontFamily || ttf.name.fullName || null;
+      const subfamilyRaw = ttf.name.preferredSubfamily || ttf.name.wwsSubfamily || ttf.name.fontSubfamily || "";
+      const subLower = subfamilyRaw.toLowerCase();
+
+      let weight = ttf['OS/2']?.usWeightClass?.toString() || null;
+      if (!weight || weight === "400") {
+        if (subLower.includes('thin') || subLower.includes('hairline')) weight = "100";
+        else if (subLower.includes('extralight') || subLower.includes('extra light') || subLower.includes('ultralight')) weight = "200";
+        else if (subLower.includes('light')) weight = "300";
+        else if (subLower.includes('medium')) weight = "500";
+        else if (subLower.includes('extrabold') || subLower.includes('extra bold') || subLower.includes('ultrabold')) weight = "800";
+        else if (subLower.includes('semibold') || subLower.includes('semi bold') || subLower.includes('demibold')) weight = "600";
+        else if (subLower.includes('bold')) weight = "700";
+        else if (subLower.includes('black') || subLower.includes('heavy')) weight = "900";
+        else if (subLower.includes('stencil')) weight = "400";
+      }
+
+      const isItalic = (ttf.post?.italicAngle !== 0 || subLower.includes('italic') || (ttf.head?.macStyle & 2));
+      const isOblique = subLower.includes('oblique');
+      const style = isItalic ? 'italic' : (isOblique ? 'oblique' : 'normal');
+
+      let subfamily = subfamilyRaw;
+      if (subLower === 'regular' || subLower === 'normal' || subLower === '') {
+        const weightNames: Record<string, string> = {
+          '100': 'Thin', '200': 'ExtraLight', '300': 'Light', '400': 'Regular',
+          '500': 'Medium', '600': 'SemiBold', '700': 'Bold', '800': 'ExtraBold', '900': 'Black'
+        };
+        let wName = weightNames[weight || '400'] || 'Regular';
+        if (subLower.includes('stencil')) wName = 'Stencil';
+        subfamily = style === 'normal' ? wName : (wName === 'Regular' ? 'Italic' : `${wName} Italic`);
+      }
+
+      return {
+        family: typeof family === 'string' ? family : null,
+        weight: weight || "400",
+        style,
+        subfamily,
+        isVariable: false,
+        axes: [],
+        instances: []
+      };
+    } catch (e2) {
+      return null;
+    }
   }
 };
 
@@ -823,10 +1011,11 @@ const getRealFontMetadata = async (fontUrl: string, referer: string) => {
       const response = await axios.get(fontUrl, {
         responseType: "arraybuffer",
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Referer": referer || urlObj.origin
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Referer": referer || urlObj.origin,
+          "Accept": "*/*"
         },
-        timeout: 5000
+        timeout: 10000
       });
       buffer = Buffer.from(response.data);
     }
@@ -837,9 +1026,17 @@ const getRealFontMetadata = async (fontUrl: string, referer: string) => {
   }
 };
 
-router.post("/upload-fonts", upload.array('fonts'), async (req, res) => {
+router.post("/upload-fonts", (req, res, next) => {
+  upload.array('fonts')(req, res, (err) => {
+    if (err) {
+      console.error("Multer Error:", err);
+      return res.status(400).json({ error: "שגיאה בהעלאת הקבצים: " + err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
   const files = req.files as Express.Multer.File[];
-  if (!files || files.length === 0) return res.status(400).json({ error: "לא הועלו קבצים" });
+  if (!files || files.length === 0) return res.status(400).json({ error: "לא העליתם קבצים" });
 
   const fontGroups: Record<string, any[]> = {};
 
@@ -849,7 +1046,9 @@ router.post("/upload-fonts", upload.array('fonts'), async (req, res) => {
       let ext = file.originalname.split('.').pop()?.toLowerCase() || 'otf';
       
       // Repair uploaded font for better preview compatibility
-      const repairResult = await processFontSuperAggressively(buffer, ext, file.originalname.split('.')[0]);
+      const weight = extractWeight(file.originalname) || '400';
+      const style = file.originalname.toLowerCase().includes('italic') ? 'italic' : 'normal';
+      const repairResult = await processFontSuperAggressively(buffer, ext, file.originalname.split('.')[0], weight, style);
       buffer = repairResult.buffer;
       const finalExt = repairResult.ext;
 
@@ -893,22 +1092,26 @@ router.post("/scan", async (req, res) => {
   try {
     const response = await axios.get(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
+        "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding": "gzip, deflate, br",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
-        "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+        "Referer": url,
+        "Origin": new URL(url).origin,
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Site": "cross-site",
         "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1"
       },
-      timeout: 15000
+      timeout: 20000,
+      maxRedirects: 5,
+      validateStatus: (status) => status < 400 // Throw on 4xx/5xx
     });
 
     const html = response.data;
@@ -1143,7 +1346,11 @@ router.post("/scan", async (req, res) => {
       try {
         const rResponse = await axios.get(rUrl, { 
           timeout: 10000,
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" }
+          headers: { 
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Referer": baseUrl
+          }
         });
         const content = rResponse.data;
         const contentStr = typeof content === 'string' ? content : JSON.stringify(content);
@@ -1269,40 +1476,19 @@ router.post("/scan", async (req, res) => {
       if (!finalFonts[cleanFamily]) finalFonts[cleanFamily] = [];
       
       const normalizedWeight = normalizeWeight(weight, bestFamily, fUrl);
-      
-      let normalizedStyle = style.toLowerCase().trim();
-      if (normalizedStyle === 'normal' || !normalizedStyle) {
-        const lowerUrl = fUrl.toLowerCase();
-        const lowerFilename = filename.toLowerCase();
-        const lowerFamily = family.toLowerCase();
-        
-        if (lowerFamily.includes('italic') || lowerUrl.includes('italic') || lowerFilename.includes('italic')) {
-          normalizedStyle = 'italic';
-        } else if (lowerFamily.includes('hollow') || lowerUrl.includes('hollow') || lowerFilename.includes('hollow')) {
-          normalizedStyle = 'hollow';
-        } else if (lowerFamily.includes('outline') || lowerUrl.includes('outline') || lowerFilename.includes('outline')) {
-          normalizedStyle = 'outline';
-        } else if (lowerFamily.includes('soft') || lowerUrl.includes('soft') || lowerFilename.includes('soft')) {
-          normalizedStyle = 'soft';
-        } else if (lowerFamily.includes('rounded') || lowerUrl.includes('rounded') || lowerFilename.includes('rounded')) {
-          normalizedStyle = 'rounded';
-        } else {
-          normalizedStyle = 'normal';
-        }
-      }
-
+      const normalizedStyle = style.toLowerCase().trim(); // Use raw normalized style for storage
       const format = fUrl.split('.').pop()?.split('?')[0].toLowerCase() || 'unknown';
       
-      const existingIdx = finalFonts[cleanFamily].findIndex(v => v.weight === normalizedWeight && v.style === normalizedStyle);
+      const existingIdx = finalFonts[cleanFamily].findIndex(v => v.url === fUrl);
       if (existingIdx === -1) {
-        finalFonts[cleanFamily].push({ family: cleanFamily, url: fUrl, weight: normalizedWeight, style: normalizedStyle, format });
+        finalFonts[cleanFamily].push({ 
+          family: cleanFamily, 
+          url: fUrl, 
+          weight: normalizedWeight, 
+          style: normalizedStyle, 
+          format 
+        });
         allUrls.add(fUrl);
-      } else {
-        const existing = finalFonts[cleanFamily][existingIdx];
-        if (format === 'woff2' && existing.format !== 'woff2') {
-          finalFonts[cleanFamily][existingIdx] = { family: cleanFamily, url: fUrl, weight: normalizedWeight, style: normalizedStyle, format };
-          allUrls.add(fUrl);
-        }
       }
     };
 
@@ -1314,64 +1500,58 @@ router.post("/scan", async (req, res) => {
     const familiesToResolve = Object.keys(finalFonts);
     const resolvedFonts: Record<string, any[]> = {};
 
+    const metaLimit = pLimit(10);
     await Promise.all(familiesToResolve.map(async (family) => {
       const variations = finalFonts[family];
       if (!variations || variations.length === 0) return;
 
-      const isGeneric = family === "Preloaded Font" || family === "Discovered Font";
+      // Resolve each variation individually to get its real family, weight, style and subfamily
+      await Promise.all(variations.map(async (v) => {
+        return metaLimit(async () => {
+          try {
+            const meta = await getRealFontMetadata(v.url, baseUrl);
+            
+            // Use the real family name found in the binary if available
+            const realFamily = meta && meta.family ? normalizeFamily(meta.family, v.url) : family;
+            const targetFamily = (realFamily && realFamily.length > 2) ? realFamily : family;
+            
+            if (!resolvedFonts[targetFamily]) resolvedFonts[targetFamily] = [];
+            
+            // Normalize subfamily: Trim, Title Case, and ensure it's not empty
+            let sub = meta?.subfamily || v.subfamily || 'Regular';
+            sub = sub.trim().split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+            if (sub === 'Normal') sub = 'Regular';
 
-      if (isGeneric) {
-        // Resolve each variation individually for generic families
-        await Promise.all(variations.map(async (v) => {
-          const meta = await getRealFontMetadata(v.url, baseUrl);
-          const realFamily = meta && meta.family ? normalizeFamily(meta.family, v.url) : v.family;
-          
-          if (!resolvedFonts[realFamily]) resolvedFonts[realFamily] = [];
-          
-          const updatedVar = { 
-            ...v, 
-            family: realFamily,
-            isVariable: meta?.isVariable,
-            axes: meta?.axes,
-            instances: meta?.instances
-          };
+            const updatedVar = { 
+              ...v, 
+              family: targetFamily,
+              subfamily: sub,
+              weight: meta?.weight || v.weight,
+              style: meta?.style || v.style,
+              isVariable: meta?.isVariable,
+              axes: meta?.axes,
+              instances: meta?.instances
+            };
 
-          const exists = resolvedFonts[realFamily].some(ev => ev.weight === updatedVar.weight && ev.style === updatedVar.style);
-          if (!exists) {
-            resolvedFonts[realFamily].push(updatedVar);
-          } else if (updatedVar.format === 'woff2') {
-            const idx = resolvedFonts[realFamily].findIndex(ev => ev.weight === updatedVar.weight && ev.style === updatedVar.style);
-            resolvedFonts[realFamily][idx] = updatedVar;
-          }
-        }));
-      } else {
-        // For named families, try to get metadata from the first variation to check for variable font info
-        const firstVar = variations[0];
-        const meta = await getRealFontMetadata(firstVar.url, baseUrl);
-        
-        const realFamily = meta && meta.family ? normalizeFamily(meta.family, firstVar.url) : family;
-        const targetFamily = (realFamily && realFamily.length > 2) ? realFamily : family;
+            // Deduplicate within the target family using weight, style, and subfamily
+            const existsIdx = resolvedFonts[targetFamily].findIndex(ev => 
+              ev.weight === updatedVar.weight && 
+              ev.style === updatedVar.style && 
+              (ev.subfamily === updatedVar.subfamily || !ev.subfamily || !updatedVar.subfamily)
+            );
 
-        if (!resolvedFonts[targetFamily]) resolvedFonts[targetFamily] = [];
-
-        variations.forEach(v => {
-          const updatedVar = {
-            ...v,
-            family: targetFamily,
-            isVariable: meta?.isVariable,
-            axes: meta?.axes,
-            instances: meta?.instances
-          };
-
-          const exists = resolvedFonts[targetFamily].some(ev => ev.weight === updatedVar.weight && ev.style === updatedVar.style);
-          if (!exists) {
-            resolvedFonts[targetFamily].push(updatedVar);
-          } else if (updatedVar.format === 'woff2') {
-            const idx = resolvedFonts[targetFamily].findIndex(ev => ev.weight === updatedVar.weight && ev.style === updatedVar.style);
-            resolvedFonts[targetFamily][idx] = updatedVar;
+            if (existsIdx === -1) {
+              resolvedFonts[targetFamily].push(updatedVar);
+            } else if (updatedVar.format === 'woff2') {
+              resolvedFonts[targetFamily][existsIdx] = updatedVar;
+            }
+          } catch (e) {
+            // If metadata fails, fall back to what we had
+            if (!resolvedFonts[family]) resolvedFonts[family] = [];
+            resolvedFonts[family].push(v);
           }
         });
-      }
+      }));
     }));
 
     // 6. FUZZY GROUPING: Group families that share a long common prefix (Nuclear Option Idea 2)
@@ -1400,8 +1580,8 @@ router.post("/scan", async (req, res) => {
         
         // If they share a significant prefix, group them
         // But BE CAREFUL: don't group if one is "Condensed" and other is not, unless prefix includes "Condensed"
-        const isCondensed = (f: string) => /\b(condensed|compressed|narrow)\b/i.test(f);
-        const isExtended = (f: string) => /\b(extended|expanded|wide)\b/i.test(f);
+        const isCondensed = (f: string) => /\b(condensed|compressed|narrow|צר)\b/i.test(f);
+        const isExtended = (f: string) => /\b(extended|expanded|wide|רחב)\b/i.test(f);
         const isMono = (f: string) => /\b(mono|monospace)\b/i.test(f);
         const isHollow = (f: string) => /\b(hollow|outline|stencil|inline|shadow|fill)\b/i.test(f);
         const isRounded = (f: string) => /\b(rounded|soft)\b/i.test(f);
@@ -1410,6 +1590,8 @@ router.post("/scan", async (req, res) => {
         const isSerif = (f: string) => /\b(serif)\b/i.test(f);
         const isScript = (f: string) => /\b(script|handwriting|calligraphy)\b/i.test(f);
         const isDisplay = (f: string) => /\b(display|poster|deck|caption|text)\b/i.test(f);
+        const isCorporate = (f: string) => /\b(corporate|business)\b/i.test(f);
+        const isPro = (f: string) => /\b(pro|expert|plus|extra)\b/i.test(f);
         
         const sameType = (isCondensed(family) === isCondensed(otherFamily)) && 
                          (isExtended(family) === isExtended(otherFamily)) &&
@@ -1420,23 +1602,46 @@ router.post("/scan", async (req, res) => {
                          (isSans(family) === isSans(otherFamily)) &&
                          (isSerif(family) === isSerif(otherFamily)) &&
                          (isScript(family) === isScript(otherFamily)) &&
-                         (isDisplay(family) === isDisplay(otherFamily));
+                         (isDisplay(family) === isDisplay(otherFamily)) &&
+                         (isCorporate(family) === isCorporate(otherFamily)) &&
+                         (isPro(family) === isPro(otherFamily));
 
-        if (prefix.length >= 8 && sameType && (family.startsWith(otherFamily) || otherFamily.startsWith(family) || prefix.length > family.length * 0.8)) {
+        // Stricter grouping logic:
+        // 1. Prefix must be a word boundary if it's one of the names
+        const familyBase = family.toLowerCase();
+        const otherBase = otherFamily.toLowerCase();
+        const isPrefixMatch = (prefix.length >= 4 && (
+          (familyBase.startsWith(otherBase) && (familyBase.length === otherBase.length || familyBase[otherBase.length] === ' ')) ||
+          (otherBase.startsWith(familyBase) && (otherBase.length === familyBase.length || otherBase[familyBase.length] === ' '))
+        ));
+
+        if (isPrefixMatch && sameType) {
           variations.push(...resolvedFonts[otherFamily]);
           processedFamilies.add(otherFamily);
-          if (prefix.length < targetFamily.length) targetFamily = prefix.trim();
+          // Keep the shorter name as the main family name during grouping if it's a perfect prefix
+          if (familyBase.startsWith(otherBase)) targetFamily = otherFamily;
         }
       }
       
       // Deduplicate variations in the grouped family
       const uniqueVariations: any[] = [];
       variations.forEach(v => {
-        const exists = uniqueVariations.some(ev => ev.weight === v.weight && ev.style === v.style);
+        // Use subfamily in the check to prevent merging distinct variations like 'Regular' and 'Mono'
+        // if they both end up with the same weight/style (e.g. 400 normal)
+        const exists = uniqueVariations.some(ev => 
+          ev.weight === v.weight && 
+          ev.style === v.style && 
+          (ev.subfamily === v.subfamily || !ev.subfamily || !v.subfamily)
+        );
+        
         if (!exists) {
           uniqueVariations.push({ ...v, family: targetFamily });
         } else if (v.format === 'woff2') {
-          const idx = uniqueVariations.findIndex(ev => ev.weight === v.weight && ev.style === v.style);
+          const idx = uniqueVariations.findIndex(ev => 
+            ev.weight === v.weight && 
+            ev.style === v.style && 
+            (ev.subfamily === v.subfamily || !ev.subfamily || !v.subfamily)
+          );
           uniqueVariations[idx] = { ...v, family: targetFamily };
         }
       });
@@ -1451,7 +1656,18 @@ router.post("/scan", async (req, res) => {
     res.json({ fonts: result });
   } catch (error: any) {
     console.error(`Scan error: ${error.message}`);
-    res.status(500).json({ error: `סריקת האתר נכשלה: ${error.message}` });
+    
+    let userMessage = `סריקת האתר נכשלה: ${error.message}`;
+    
+    if (error.response?.status === 403) {
+      userMessage = "הגישה לאתר זה נחסמה (שגיאה 403). ייתכן שהאתר מזהה סריקה אוטומטית וחוסם אותה.";
+    } else if (error.code === 'ECONNABORTED') {
+      userMessage = "הסריקה נפסקה עקב זמן טעינה ארוך מדי. האתר איטי מאוד או חוסם אותנו.";
+    } else if (error.code === 'ENOTFOUND') {
+      userMessage = "כתובת האתר לא נמצאה. וודאו שהזנתם כתובת תקינה.";
+    }
+    
+    res.status(error.response?.status || 500).json({ error: userMessage });
   }
 });
 
@@ -1501,13 +1717,16 @@ router.post("/download", async (req, res) => {
           const response = await axios.get(absoluteUrl, {
             responseType: "arraybuffer",
             headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "*/*",
-              "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
               "Referer": referer || fontUrlObj.origin,
               "Origin": fontUrlObj.origin,
               "Cache-Control": "no-cache",
               "Pragma": "no-cache",
+              "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+              "Sec-Ch-Ua-Mobile": "?0",
+              "Sec-Ch-Ua-Platform": '"Windows"',
               "Sec-Fetch-Dest": "font",
               "Sec-Fetch-Mode": "cors",
               "Sec-Fetch-Site": "cross-site"
@@ -1586,7 +1805,7 @@ router.post("/download", async (req, res) => {
         let finalExt = ext;
 
         try {
-          const result = await processFontSuperAggressively(buffer, ext, font.family);
+          const result = await processFontSuperAggressively(buffer, ext, font.family, font.weight, font.style);
           buffer = result.buffer;
           finalExt = result.ext;
         } catch (e: any) {
@@ -1597,10 +1816,24 @@ router.post("/download", async (req, res) => {
         
         // Sanitize filename
         const familySafe = font.family.replace(/[<>:"/\\|?*]/g, '').trim().replace(/\s+/g, '-').slice(0, 30);
-        const weightSafe = font.weight.toString().replace(/[^a-zA-Z0-9]/g, '');
-        let filename = `${familySafe}-${weightSafe}-${font.style}.${finalExt}`;
+        const weightNames: Record<string, string> = {
+          '100': 'Thin', '200': 'ExtraLight', '300': 'Light', '400': 'Regular',
+          '500': 'Medium', '600': 'SemiBold', '700': 'Bold', '800': 'ExtraBold', '1000': 'Black', '900': 'Black', '950': 'Black'
+        };
+        const weightSafe = weightNames[font.weight] || font.weight.toString().replace(/[^a-zA-Z0-9]/g, '');
+        const styleSafe = font.style && font.style !== 'normal' ? `-${font.style.charAt(0).toUpperCase() + font.style.slice(1)}` : '';
+        let filename = `${familySafe}-${weightSafe}${styleSafe}.${finalExt}`;
         
-        if (font.originalName) {
+        // Helper to check if a name looks like a "messy" automated webfont name
+        const isMessyName = (name: string) => {
+          const lower = name.toLowerCase();
+          if (lower.includes('webfont')) return true;
+          // All lowercase, no separators, and relatively long
+          if (lower === name && name.length > 12 && !name.includes('-') && !name.includes('_')) return true;
+          return false;
+        };
+
+        if (font.originalName && !isMessyName(font.originalName)) {
           const parts = font.originalName.split('.');
           if (parts.length > 1) {
             parts.pop(); // remove original extension
@@ -1617,7 +1850,9 @@ router.post("/download", async (req, res) => {
                 const nameParts = baseName.split('.');
                 nameParts.pop();
                 const baseSafe = nameParts.join('.').replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 30);
-                filename = `${baseSafe}.${finalExt}`;
+                if (!isMessyName(baseSafe)) {
+                  filename = `${baseSafe}.${finalExt}`;
+                }
               }
             }
           } catch (e) {}
@@ -1656,5 +1891,15 @@ router.post("/download", async (req, res) => {
 });
 
 app.use("/api", router);
+
+// Global error handler to ensure JSON responses instead of HTML
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("Global Error Handler:", err);
+  if (res.headersSent) return next(err);
+  res.status(err.status || 500).json({ 
+    error: err.message || "שגיאת שרת פנימית",
+    details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  });
+});
 
 export default app;
